@@ -26,6 +26,8 @@ import (
 )
 
 const (
+	rayStateMountPath               = "/tmp/ray"
+	defaultRayStateVolName          = "system-ray-state"
 	rayTaskType                     = "ray"
 	KindRayJob                      = "RayJob"
 	IncludeDashboard                = "include-dashboard"
@@ -220,38 +222,46 @@ func buildHeadPodTemplate(container *v1.Container, podSpec *v1.PodSpec, objectMe
 	headPodSpec := podSpec.DeepCopy()
 
 	// Ray logs integration
-	foundTmpRayVolMount := false
+	var rayStateVolMount *v1.VolumeMount
+	// Look for an existing volume mount on the primary container, mounted at /tmp/ray
 	for _, vm := range primaryContainer.VolumeMounts {
-		if vm.MountPath == "/tmp/ray" {
-			foundTmpRayVolMount = true
+		if vm.MountPath == rayStateMountPath {
+			vm := vm
+			rayStateVolMount = &vm
 			break
 		}
 	}
-	if !foundTmpRayVolMount {
+	// No existing volume mount exists at /tmp/ray. We create a new volume and volume
+	// mount and add it to the pod and container specs respectively
+	if rayStateVolMount == nil {
 		vol := v1.Volume{
-			Name: "system-ray-state",
+			Name: defaultRayStateVolName,
 			VolumeSource: v1.VolumeSource{
 				EmptyDir: &v1.EmptyDirVolumeSource{},
 			},
 		}
 		headPodSpec.Volumes = append(headPodSpec.Volumes, vol)
+		volMount := v1.VolumeMount{
+			Name:      defaultRayStateVolName,
+			MountPath: rayStateMountPath,
+		}
+		primaryContainer.VolumeMounts = append(primaryContainer.VolumeMounts, volMount)
+		rayStateVolMount = &volMount
 	}
-
-	writeableVolMount := v1.VolumeMount{
-		Name:      "system-ray-state",
-		MountPath: "/tmp/ray",
-	}
-	primaryContainer.VolumeMounts = append(primaryContainer.VolumeMounts, writeableVolMount)
-
-	readOnlyVolMount := *writeableVolMount.DeepCopy()
-	readOnlyVolMount.ReadOnly = true
+	// We need to mirror the ray state volume mount into the logs sidecar as readonly,
+	// so that we can read the logs written by the head node.
+	readOnlyRayStateVolMount := *rayStateVolMount.DeepCopy()
+	readOnlyRayStateVolMount.ReadOnly = true
+	// Create the logging sidecar and add it to the pod spec
+	// TODO (jeev): We need to make this logging sidecar a bit more configurable.
+	// Preferably, we should allow image, image pull policy, and container resources
+	// to be configurable, just like we do for co-pilot.
 	loggingSidecar := v1.Container{
 		Name:            "logs",
 		Image:           "localhost:30000/ray-logs:latest",
 		ImagePullPolicy: v1.PullAlways,
-		VolumeMounts:    []v1.VolumeMount{readOnlyVolMount},
+		VolumeMounts:    []v1.VolumeMount{readOnlyRayStateVolMount},
 	}
-
 	headPodSpec.Containers = []v1.Container{*primaryContainer, loggingSidecar}
 
 	podTemplateSpec := v1.PodTemplateSpec{
