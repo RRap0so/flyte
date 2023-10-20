@@ -219,7 +219,40 @@ func buildHeadPodTemplate(container *v1.Container, podSpec *v1.PodSpec, objectMe
 
 	headPodSpec := podSpec.DeepCopy()
 
-	headPodSpec.Containers = []v1.Container{*primaryContainer}
+	// Ray logs integration
+	foundTmpRayVolMount := false
+	for _, vm := range primaryContainer.VolumeMounts {
+		if vm.MountPath == "/tmp/ray" {
+			foundTmpRayVolMount = true
+			break
+		}
+	}
+	if !foundTmpRayVolMount {
+		vol := v1.Volume{
+			Name: "system-ray-state",
+			VolumeSource: v1.VolumeSource{
+				EmptyDir: &v1.EmptyDirVolumeSource{},
+			},
+		}
+		headPodSpec.Volumes = append(headPodSpec.Volumes, vol)
+	}
+
+	writeableVolMount := v1.VolumeMount{
+		Name:      "system-ray-state",
+		MountPath: "/tmp/ray",
+	}
+	primaryContainer.VolumeMounts = append(primaryContainer.VolumeMounts, writeableVolMount)
+
+	readOnlyVolMount := *writeableVolMount.DeepCopy()
+	readOnlyVolMount.ReadOnly = true
+	loggingSidecar := v1.Container{
+		Name:            "logs",
+		Image:           "localhost:30000/ray-logs:latest",
+		ImagePullPolicy: v1.PullAlways,
+		VolumeMounts:    []v1.VolumeMount{readOnlyVolMount},
+	}
+
+	headPodSpec.Containers = []v1.Container{*primaryContainer, loggingSidecar}
 
 	podTemplateSpec := v1.PodTemplateSpec{
 		Spec:       *headPodSpec,
