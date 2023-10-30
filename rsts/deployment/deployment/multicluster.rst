@@ -246,7 +246,7 @@ attached to the Service Account. As of Kubernetes 1.24 and above, the bearer tok
 
 1. Use the following manifest to create a long-lived bearer token for the ``flyteadmin`` Service Account in your data plane cluster:
 
-   .. prompt:: bash 
+   .. prompt:: bash $
    
       kubectl apply -f - <<EOF
       apiVersion: v1
